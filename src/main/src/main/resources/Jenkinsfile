@@ -1,0 +1,60 @@
+pipeline {
+    agent any
+    triggers {
+        githubPush()
+    }
+    stages {
+        stage('Build') {
+            steps {
+                git branch: 'main', url: 'your_git_repo_url'
+                sh 'mvn clean package'
+            }
+        }
+        stage('Build Docker Image') {
+            steps {
+                sh 'docker build -t automated-spring-boot .'
+            }
+        }
+        stage('Push to Docker Hub (Optional)') {
+            when {
+                expression { return env.BRANCH_NAME == 'main' }
+            }
+            steps {
+                withCredentials([usernamePassword(credentialsId: 'dockerhub-creds', usernameVariable: 'USERNAME', passwordVariable: 'PASSWORD')]) {
+                    sh "docker login -u $USERNAME -p $PASSWORD"
+                    sh 'docker tag automated-spring-boot:latest your_dockerhub_username/automated-spring-boot:latest'
+                    sh 'docker push your_dockerhub_username/automated-spring-boot:latest'
+                }
+            }
+        }
+        stage('Deploy to EC2') {
+            steps {
+                sshPublisher(publishers: [sshPublisherDesc(configName: 'ec2-server',
+                                                            transfers: [sshTransfer(cleanRemote: false,
+                                                                                 excludes: '',
+                                                                                 execCommand: '''
+                                                                                     #!/bin/bash
+                                                                                     docker stop automated-spring-boot || true
+                                                                                     docker rm automated-spring-boot || true
+                                                                                     docker pull your_dockerhub_username/automated-spring-boot:latest || true # Or just automated-spring-boot if not using Docker Hub
+                                                                                     docker run -d -p 8080:8080 --name automated-spring-boot your_dockerhub_username/automated-spring-boot:latest
+                                                                                     echo "Deployment Complete"
+                                                                                 ''',
+                                                                                 flatten: false,
+                                                                                 makeEmptyDirs: false,
+                                                                                 noDefaultExcludes: false,
+                                                                                 remoteDirectory: '/home/ubuntu',
+                                                                                 removePrefix: '',
+                                                                                 sourceFiles: '')],
+                                                            usePromotion: false,
+                                                            useRetry: false)],
+                             continueOnError: false,
+                             failOnError: true,
+                             hostKeyAlias: '',
+                             publishEvenIfNothingToTransfer: false,
+                             retryTimes: 0,
+                             timeout: 120000)
+            }
+        }
+    }
+}
